@@ -49,8 +49,25 @@ export class DevServer extends EventEmitter {
 export class PreviewProtocol extends EventEmitter {
   constructor({ secret = crypto.randomBytes(32) } = {}) { super(); this.secret = Buffer.from(secret); this.devices = new Map(); }
   createPairing({ project, expiresInMs = 5 * 60_000 } = {}) { const payload = { project, nonce: crypto.randomUUID(), expiresAt: Date.now() + expiresInMs }; const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url'); const signature = crypto.createHmac('sha256', this.secret).update(encoded).digest('base64url'); return `${encoded}.${signature}`; }
-  pair(token, device) { const [encoded, signature] = String(token).split('.'); const expected = crypto.createHmac('sha256', this.secret).update(encoded).digest('base64url'); if (!signature || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) throw new Error('invalid preview pairing token'); const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); if (payload.expiresAt < Date.now()) throw new Error('preview pairing token expired'); const id = device.id ?? crypto.randomUUID(); this.devices.set(id, { id, project: payload.project, ...structuredClone(device), pairedAt: new Date().toISOString() }); this.emit('paired', this.devices.get(id)); return structuredClone(this.devices.get(id)); }
-  list(project = null) { return [...this.devices.values()].filter((device) => !project || device.project === project).map(structuredClone); }
+  pair(token, device) {
+    const parts = String(token).split('.');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error('invalid preview pairing token');
+    const [encoded, signature] = parts;
+    const expected = crypto.createHmac('sha256', this.secret).update(encoded).digest('base64url');
+    const suppliedBytes = Buffer.from(signature);
+    const expectedBytes = Buffer.from(expected);
+    if (suppliedBytes.length !== expectedBytes.length || !crypto.timingSafeEqual(suppliedBytes, expectedBytes)) throw new Error('invalid preview pairing token');
+    let payload;
+    try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); }
+    catch { throw new Error('invalid preview pairing token'); }
+    if (!payload?.project || !Number.isFinite(payload.expiresAt)) throw new Error('invalid preview pairing token');
+    if (payload.expiresAt < Date.now()) throw new Error('preview pairing token expired');
+    const id = device.id ?? crypto.randomUUID();
+    this.devices.set(id, { id, project: payload.project, ...structuredClone(device), pairedAt: new Date().toISOString() });
+    this.emit('paired', this.devices.get(id));
+    return structuredClone(this.devices.get(id));
+  }
+  list(project = null) { return [...this.devices.values()].filter((device) => !project || device.project === project).map((device) => structuredClone(device)); }
 }
 
 export function targetPlan(target, config = {}) {
