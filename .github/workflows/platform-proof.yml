@@ -36,6 +36,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: mrcodeislife718/Plasma
+          path: Plasma
+      - uses: actions/checkout@v4
+        with:
+          repository: mrcodeislife718/Chronos
+          path: Chronos
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -43,22 +51,35 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Generate Android project
-        run: node test/generate-platform.mjs android .proof/android
+      - name: Generate Android project and signed ecosystem handoff
+        run: |
+          node test/generate-platform.mjs android .proof/android
+          node test/ecosystem-handoff.mjs .proof/ecosystem-handoff.json
       - uses: android-actions/setup-android@v3
       - name: Build installable Android APK
         working-directory: .proof/android
         run: gradle :app:assembleDebug --stacktrace
-      - name: Boot emulator, install, launch, and verify activity
+      - name: Boot emulator, pair, hot reload, and verify without reinstall
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_6
           script: |
+            set -euo pipefail
             adb install -r .proof/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -W -n dev.cannon.velocityproof/.MainActivity
-            adb shell dumpsys activity activities | grep dev.cannon.velocityproof
+            adb shell uiautomator dump /sdcard/before.xml >/dev/null
+            adb shell cat /sdcard/before.xml | grep 'Velocity Android Ready'
+            payload=$(node -p "require('./.proof/ecosystem-handoff.json').message")
+            token=$(node -p "require('./.proof/ecosystem-handoff.json').pairingToken")
+            verified=$(node -p "require('./.proof/ecosystem-handoff.json').verified")
+            test "$verified" = "true"
+            adb shell am start -W -n dev.cannon.velocityproof/.MainActivity --es payload "$payload" --es pairingToken "$token"
+            sleep 1
+            adb shell uiautomator dump /sdcard/after.xml >/dev/null
+            adb shell cat /sdcard/after.xml | grep "$payload"
+            adb shell cat /sdcard/after.xml | grep "velocity-proof:$token"
 
   ios-simulator:
     runs-on: macos-latest
@@ -87,5 +108,5 @@ jobs:
           open -a Simulator || true
           xcrun simctl bootstatus "$device" -b
           xcrun simctl install "$device" .proof/ios/VelocityProof.app
-          xcrun simctl launch "$device" dev.cannon.velocityproof
-          xcrun simctl spawn "$device" launchctl print system | grep -i velocity || true
+          pid=$(xcrun simctl launch "$device" dev.cannon.velocityproof | awk '{print $2}')
+          test -n "$pid"
