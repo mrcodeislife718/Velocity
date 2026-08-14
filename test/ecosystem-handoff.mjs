@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { AdapterRegistry, createJavaScriptAdapter } from '../../Plasma/src/index.js';
-import { createArtifact } from '../../Chronos/src/index.js';
-import { SigningVault, createSignedBuild, canonicalSigningPayload } from '../../Chronos/src/cloud.js';
+import { AdapterRegistry, createJavaScriptAdapter } from '../Plasma/src/index.js';
+import { createArtifact } from '../Chronos/src/index.js';
+import { SigningVault, createSignedBuild, canonicalSigningPayload } from '../Chronos/src/cloud.js';
 
 const output = process.argv[2] ?? '.proof/ecosystem-handoff.json';
 const registry = new AdapterRegistry();
