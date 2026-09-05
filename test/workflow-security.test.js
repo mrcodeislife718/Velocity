@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { DevServer, executeTargetPlan, PreviewProtocol, chronosHandoff } from '../src/index.js';
 
 async function projectFixture(t) {
@@ -31,17 +32,11 @@ test('dev server refuses symlink escapes outside the project root', async (t) =>
 });
 
 test('target execution enforces a deadline on real child processes', async () => {
-  await assert.rejects(
-    () => executeTargetPlan({ target: 'test', tool: process.execPath }, { args: ['-e', 'setTimeout(()=>{},10000)'], timeoutMs: 40 }),
-    /timed out/
-  );
+  await assert.rejects(() => executeTargetPlan({ target: 'test', tool: process.execPath }, { args: ['-e', 'setTimeout(()=>{},10000)'], timeoutMs: 40 }), /timed out/);
 });
 
 test('target execution enforces output ceilings', async () => {
-  await assert.rejects(
-    () => executeTargetPlan({ target: 'test', tool: process.execPath }, { args: ['-e', 'process.stdout.write("x".repeat(4096))'], maxOutputBytes: 128 }),
-    /stdout exceeded/
-  );
+  await assert.rejects(() => executeTargetPlan({ target: 'test', tool: process.execPath }, { args: ['-e', 'process.stdout.write("x".repeat(4096))'], maxOutputBytes: 128 }), /stdout exceeded/);
 });
 
 test('target execution can be aborted by the caller', async () => {
@@ -52,17 +47,16 @@ test('target execution can be aborted by the caller', async () => {
 });
 
 test('preview pairing tokens reject tampering and expiry', () => {
-  const protocol = new PreviewProtocol({ secret: Buffer.alloc(32, 7) });
+  const secret = Buffer.alloc(32, 7);
+  const protocol = new PreviewProtocol({ secret });
   const token = protocol.createPairing({ project: 'demo', expiresInMs: 10_000 });
   assert.equal(protocol.pair(token, { id: 'device-1' }).project, 'demo');
   assert.throws(() => protocol.pair(token.slice(0, -1) + (token.endsWith('a') ? 'b' : 'a'), { id: 'device-2' }), /invalid preview pairing token/);
-  const expired = protocol.createPairing({ project: 'demo', expiresInMs: 1 });
-  const [encoded, signature] = expired.split('.');
+  const [encoded] = protocol.createPairing({ project: 'demo', expiresInMs: 10_000 }).split('.');
   const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
   payload.expiresAt = Date.now() - 1;
   const changed = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const crypto = await import('node:crypto');
-  const resigned = crypto.createHmac('sha256', Buffer.alloc(32, 7)).update(changed).digest('base64url');
+  const resigned = crypto.createHmac('sha256', secret).update(changed).digest('base64url');
   assert.throws(() => protocol.pair(`${changed}.${resigned}`, { id: 'device-3' }), /expired/);
 });
 
