@@ -128,23 +128,34 @@ export async function executeTargetPlan(plan, { cwd = process.cwd(), env = proce
   if (!Number.isInteger(maxOutputBytes) || maxOutputBytes < 1) throw new TypeError('maxOutputBytes must be a positive integer');
   const command = resolveCommand(plan, args);
   return new Promise((resolve, reject) => {
-    let settled = false, stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), timedOut = false;
+    let settled = false, stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), timedOut = false, terminationError = null;
     const child = spawn(command.bin, command.args, { cwd, env, stdio: 'pipe', shell: false, windowsHide: true });
     const finish = (error, result) => { if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener?.('abort', onAbort); if (error) reject(error); else resolve(result); };
-    const terminate = (error, timeout = false) => { timedOut ||= timeout; if (!child.killed) child.kill('SIGKILL'); if (error) finish(error); };
+    const terminate = (error, timeout = false) => {
+      timedOut ||= timeout;
+      terminationError ??= error;
+      if (child.exitCode == null && child.signalCode == null) {
+        try { child.kill('SIGKILL'); } catch (killError) { terminationError ??= killError; }
+      }
+    };
     const timer = setTimeout(() => terminate(new Error(`Velocity target command timed out after ${timeoutMs}ms`), true), timeoutMs); timer.unref?.();
     const onAbort = () => terminate(signal.reason instanceof Error ? signal.reason : new Error('Velocity target command aborted'));
-    if (signal?.aborted) return onAbort();
-    signal?.addEventListener?.('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener?.('abort', onAbort, { once: true });
     const append = (buffer, chunk, streamName) => {
+      if (terminationError) return buffer;
       const bytes = Buffer.from(chunk);
       if (buffer.length + bytes.length > maxOutputBytes) { terminate(new Error(`Velocity target ${streamName} exceeded ${maxOutputBytes} bytes`)); return buffer; }
       return Buffer.concat([buffer, bytes]);
     };
     child.stdout.on('data', (chunk) => { stdout = append(stdout, chunk, 'stdout'); });
     child.stderr.on('data', (chunk) => { stderr = append(stderr, chunk, 'stderr'); });
-    child.on('error', (error) => finish(error));
-    child.on('close', (code, exitSignal) => { if (settled) return; finish(null, { ok: code === 0, code, signal: exitSignal, timedOut, stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), command }); });
+    child.once('error', (error) => finish(error));
+    child.once('close', (code, exitSignal) => {
+      if (settled) return;
+      if (terminationError) { finish(terminationError); return; }
+      finish(null, { ok: code === 0, code, signal: exitSignal, timedOut, stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), command });
+    });
   });
 }
 
