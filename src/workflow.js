@@ -76,10 +76,16 @@ export class DevServer extends EventEmitter {
 }
 
 export class PreviewProtocol extends EventEmitter {
-  constructor({ secret = crypto.randomBytes(32) } = {}) { super(); this.secret = Buffer.from(secret); this.devices = new Map(); }
+  constructor({ secret = crypto.randomBytes(32) } = {}) {
+    super();
+    this.secret = Buffer.from(secret);
+    this.devices = new Map();
+    this.consumedNonces = new Map();
+  }
   createPairing({ project, expiresInMs = 5 * 60_000 } = {}) {
     if (!project) throw new TypeError('preview pairing requires project');
     if (!Number.isInteger(expiresInMs) || expiresInMs < 1 || expiresInMs > 24 * 60 * 60_000) throw new TypeError('expiresInMs must be between 1ms and 24h');
+    this.#pruneConsumed();
     const payload = { project, nonce: crypto.randomUUID(), expiresAt: Date.now() + expiresInMs };
     const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
     const signature = crypto.createHmac('sha256', this.secret).update(encoded).digest('base64url');
@@ -97,13 +103,18 @@ export class PreviewProtocol extends EventEmitter {
     let payload;
     try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch { throw new Error('invalid preview pairing token'); }
     if (!payload?.project || !payload?.nonce || !Number.isFinite(payload.expiresAt)) throw new Error('invalid preview pairing token');
-    if (payload.expiresAt < Date.now()) throw new Error('preview pairing token expired');
+    const now = Date.now();
+    this.#pruneConsumed(now);
+    if (payload.expiresAt < now) throw new Error('preview pairing token expired');
+    if (this.consumedNonces.has(payload.nonce)) throw new Error('preview pairing token already used');
+    this.consumedNonces.set(payload.nonce, payload.expiresAt);
     const id = device.id ?? crypto.randomUUID();
     this.devices.set(id, { id, project: payload.project, ...structuredClone(device), pairedAt: new Date().toISOString() });
     this.emit('paired', this.devices.get(id));
     return structuredClone(this.devices.get(id));
   }
   list(project = null) { return [...this.devices.values()].filter((device) => !project || device.project === project).map((device) => structuredClone(device)); }
+  #pruneConsumed(now = Date.now()) { for (const [nonce, expiresAt] of this.consumedNonces) if (expiresAt < now) this.consumedNonces.delete(nonce); }
 }
 
 export function targetPlan(target, config = {}) {
