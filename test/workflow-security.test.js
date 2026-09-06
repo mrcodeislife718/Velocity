@@ -46,11 +46,12 @@ test('target execution can be aborted by the caller', async () => {
   await assert.rejects(() => pending, /cancelled target/);
 });
 
-test('preview pairing tokens reject tampering and expiry', () => {
+test('preview pairing tokens reject tampering expiry and replay', () => {
   const secret = Buffer.alloc(32, 7);
   const protocol = new PreviewProtocol({ secret });
   const token = protocol.createPairing({ project: 'demo', expiresInMs: 10_000 });
   assert.equal(protocol.pair(token, { id: 'device-1' }).project, 'demo');
+  assert.throws(() => protocol.pair(token, { id: 'device-replay' }), /already used/);
   assert.throws(() => protocol.pair(token.slice(0, -1) + (token.endsWith('a') ? 'b' : 'a'), { id: 'device-2' }), /invalid preview pairing token/);
   const [encoded] = protocol.createPairing({ project: 'demo', expiresInMs: 10_000 }).split('.');
   const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
@@ -58,6 +59,15 @@ test('preview pairing tokens reject tampering and expiry', () => {
   const changed = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const resigned = crypto.createHmac('sha256', secret).update(changed).digest('base64url');
   assert.throws(() => protocol.pair(`${changed}.${resigned}`, { id: 'device-3' }), /expired/);
+});
+
+test('different pairing tokens remain independently usable', () => {
+  const protocol = new PreviewProtocol({ secret: Buffer.alloc(32, 9) });
+  const first = protocol.createPairing({ project: 'demo' });
+  const second = protocol.createPairing({ project: 'demo' });
+  assert.equal(protocol.pair(first, { id: 'a' }).id, 'a');
+  assert.equal(protocol.pair(second, { id: 'b' }).id, 'b');
+  assert.deepEqual(protocol.list('demo').map((entry) => entry.id).sort(), ['a','b']);
 });
 
 test('Chronos handoff digest is deterministic across object key insertion order', () => {
