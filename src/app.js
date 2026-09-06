@@ -4,7 +4,7 @@ const VALID_TARGETS = new Set(['web', 'server', 'cli', 'desktop', 'mobile', 'wor
 
 export function defineApp(config = {}) {
   if (!config.name || typeof config.name !== 'string') throw new TypeError('Velocity app requires a name');
-  const targets = [...new Set(config.targets ?? ['web'])];
+  const targets = Object.freeze([...new Set(config.targets ?? ['web'])]);
   for (const target of targets) {
     if (!VALID_TARGETS.has(target)) throw new Error(`unsupported Velocity target: ${target}`);
   }
@@ -13,19 +13,19 @@ export function defineApp(config = {}) {
     name: config.name,
     entry: config.entry ?? 'src/main.cannon',
     targets,
-    environment: { ...(config.environment ?? {}) },
-    services: {
+    environment: Object.freeze({ ...(config.environment ?? {}) }),
+    services: Object.freeze({
       ui: config.services?.ui ?? (targets.includes('web') ? 'sprout' : null),
       backend: config.services?.backend ?? (targets.some((target) => ['server', 'worker'].includes(target)) ? 'cadence' : null),
       database: config.services?.database ?? null,
       deploy: config.services?.deploy ?? 'chronos'
-    },
-    build: {
+    }),
+    build: Object.freeze({
       mode: config.build?.mode ?? 'release',
       outDir: config.build?.outDir ?? 'dist',
       sourceMaps: config.build?.sourceMaps ?? true,
       optimize: config.build?.optimize ?? true
-    }
+    })
   };
 
   return Object.freeze(app);
